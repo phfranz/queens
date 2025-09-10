@@ -336,7 +336,7 @@ class MetropolisHastings(Iterator):
                 )
                 _logger.info(
                     "\tmean±std: %s±%s",
-                    results.get("result", np.array([np.nan] * self.num_chains))[i],
+                    results.get("mean", np.array([np.nan] * self.num_chains))[i],
                     np.sqrt(results.get("var", np.array([np.nan] * self.num_chains))[i]),
                 )
                 _logger.info(

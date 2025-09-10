@@ -109,7 +109,11 @@ class Normal(Continuous):
         Returns:
             logpdf (np.ndarray): log pdf at evaluated positions
         """
-        dist = x.reshape(-1, self.dimension) - self.mean
+        #dist = x.reshape(-1, self.dimension) - self.mean
+
+        # TODO: check if this works for multiple chains
+        dist = np.tile(x, self.dimension//x.shape[1]).reshape(-1, self.dimension) - self.mean
+
         logpdf = self.logpdf_const - 0.5 * (np.dot(dist, self.precision) * dist).sum(axis=1)
         return logpdf
 
