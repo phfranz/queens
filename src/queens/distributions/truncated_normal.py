@@ -34,8 +34,8 @@ class TruncatedNormal(Continuous):
     """
 
     @log_init_args
-    def __init__(self, a, b, mean, covariance):
-        """Initialize truncated normal distribution.
+    def __init__(self, mean, covariance, a_trunc=0., b_trunc=1.):
+        """Initialize univariate truncated normal distribution.
 
         Args:
             mean (array_like): mean of the distribution
@@ -43,52 +43,28 @@ class TruncatedNormal(Continuous):
             a (float): lower bound
             b (float): upper bound
         """
-        mean = np.array(mean).reshape(-1)
-        covariance = at_least_2d(np.array(covariance))
-
-        # sanity checks
-        dimension = covariance.shape[0]
-        if covariance.ndim != 2:
-            raise ValueError(
-                f"Provided covariance is not a matrix. "
-                f"Provided covariance shape: {covariance.shape}"
-            )
-        if dimension != covariance.shape[1]:
-            raise ValueError(
-                "Provided covariance matrix is not quadratic. "
-                f"Provided covariance shape: {covariance.shape}"
-            )
-        if not np.allclose(covariance.T, covariance):
-            raise ValueError(
-                "Provided covariance matrix is not symmetric. " f"Provided covariance: {covariance}"
-            )
-        if mean.shape[0] != dimension:
-            raise ValueError(
-                f"Dimension of mean vector and covariance matrix do not match. "
-                f"Provided dimension of mean vector: {mean.shape[0]}. "
-                f"Provided dimension of covariance matrix: {dimension}. "
-            )
-
-        if np.isscalar(mean) == False:
+        #mean = np.array(mean).reshape(-1)
+       
+        if np.isscalar(mean) is False:
             raise ValueError(
                 f"Provided mean is not a scalar. "
                 f"Provided mean shape: {mean.shape}"
             )
 
-        if np.isscalar(covariance) == False:
+        if np.isscalar(covariance) is False:
             raise ValueError(
                 f"Provided mean is not a scalar. "
                 f"Provided mean shape: {covariance.shape}"
             )
+        
+        dimension = 1
 
-        self.a = a
-        self.b = b
-
-        low_chol, precision, logpdf_const = self._calculate_distribution_parameters(covariance)
+        #low_chol, precision, logpdf_const = self._calculate_distribution_parameters(covariance)
         super().__init__(mean, covariance, dimension)
-        self.low_chol = low_chol
-        self.precision = precision
-        self.logpdf_const = logpdf_const
+        self.mean = mean
+        self.precision = 1/covariance
+        self.a = (a_trunc - self.mean) / np.sqrt(1/self.precision)
+        self.b = (b_trunc - self.mean) / np.sqrt(1/self.precision)
 
     def cdf(self, x):
         """Cumulative distribution function.
@@ -99,10 +75,10 @@ class TruncatedNormal(Continuous):
         Returns:
             cdf (np.ndarray): cdf at evaluated positions
         """
-        cdf = scipy.stats.multivariate_normal.cdf(
-            x.reshape(-1, self.dimension), mean=self.mean, cov=self.covariance
-        ).reshape(-1)
-        return cdf
+        # cdf = scipy.stats.truncnorm.cdf(
+        #     x.reshape(-1, self.dimension), a=self.a, b=self.b, mean=self.mean, cov=self.covariance
+        # ).reshape(-1)
+        # return cdf
 
     def draw(self, num_draws=1):
         """Draw samples.
@@ -113,9 +89,9 @@ class TruncatedNormal(Continuous):
         Returns:
             samples (np.ndarray): Drawn samples from the distribution
         """
-        uncorrelated_vector = np.random.randn(self.dimension, num_draws)
-        samples = self.mean + np.dot(self.low_chol, uncorrelated_vector).T
-        return samples
+        # uncorrelated_vector = np.random.randn(self.dimension, num_draws)
+        # samples = self.mean + np.dot(self.low_chol, uncorrelated_vector).T
+        # return samples
 
     def logpdf(self, x):
         """Log of the probability density function.
@@ -129,10 +105,15 @@ class TruncatedNormal(Continuous):
         #dist = x.reshape(-1, self.dimension) - self.mean
 
         # TODO: check if this works for multiple chains
-        dist = np.tile(x, self.dimension//x.shape[1]).reshape(-1, self.dimension) - self.mean
 
-        logpdf = self.logpdf_const - 0.5 * (np.dot(dist, self.precision) * dist).sum(axis=1)
+        #x = np.tile(x, self.dimension//x.shape[1]).reshape(-1, self.dimension)
+
+        logpdf = scipy.stats.truncnorm.logpdf(x, self.a, self.b, self.mean, np.sqrt(1/self.precision))
+
+        #log_sum = logpdf.sum(axis=-1)
+        
         return logpdf
+
 
     def grad_logpdf(self, x):
         """Gradient of the log pdf with respect to *x*.
@@ -143,9 +124,9 @@ class TruncatedNormal(Continuous):
         Returns:
             grad_logpdf (np.ndarray): Gradient of the log pdf evaluated at positions
         """
-        x = x.reshape(-1, self.dimension)
-        grad_logpdf = np.dot(self.mean.reshape(1, -1) - x, self.precision)
-        return grad_logpdf
+        # x = x.reshape(-1, self.dimension)
+        # grad_logpdf = np.dot(self.mean.reshape(1, -1) - x, self.precision)
+        # return grad_logpdf
 
     def pdf(self, x):
         """Probability density function.
@@ -168,11 +149,11 @@ class TruncatedNormal(Continuous):
         Returns:
             ppf (np.ndarray): Positions which correspond to given quantiles
         """
-        self.check_1d()
-        ppf = scipy.stats.norm.ppf(
-            quantiles, loc=self.mean, scale=self.covariance ** (1 / 2)
-        ).reshape(-1)
-        return ppf
+        # self.check_1d()
+        # ppf = scipy.stats.norm.ppf(
+        #     quantiles, loc=self.mean, scale=self.covariance ** (1 / 2)
+        # ).reshape(-1)
+        # return ppf
 
     def update_covariance(self, covariance):
         """Update covariance and dependent distribution parameters.
@@ -180,11 +161,11 @@ class TruncatedNormal(Continuous):
         Args:
             covariance (np.ndarray): Covariance matrix
         """
-        low_chol, precision, logpdf_const = self._calculate_distribution_parameters(covariance)
-        self.covariance = covariance
-        self.low_chol = low_chol
-        self.precision = precision
-        self.logpdf_const = logpdf_const
+        # low_chol, precision, logpdf_const = self._calculate_distribution_parameters(covariance)
+        # self.covariance = covariance
+        # self.low_chol = low_chol
+        # self.precision = precision
+        # self.logpdf_const = logpdf_const
 
     @staticmethod
     def _calculate_distribution_parameters(covariance):
@@ -198,13 +179,13 @@ class TruncatedNormal(Continuous):
             precision (np.ndarray): Precision matrix corresponding to covariance matrix
             logpdf_const (float): Constant for evaluation of log pdf
         """
-        dimension = covariance.shape[0]
-        low_chol = safe_cholesky(covariance)
+        # dimension = covariance.shape[0]
+        # low_chol = safe_cholesky(covariance)
 
-        # precision matrix Q and determinant of cov matrix
-        chol_inv = np.linalg.inv(low_chol)
-        precision = np.dot(chol_inv.T, chol_inv)
+        # # precision matrix Q and determinant of cov matrix
+        # chol_inv = np.linalg.inv(low_chol)
+        # precision = np.dot(chol_inv.T, chol_inv)
 
-        # constant needed for pdf
-        logpdf_const = -1 / 2 * (np.log(2.0 * np.pi) * dimension + np.linalg.slogdet(covariance)[1])
-        return low_chol, precision, logpdf_const
+        # # constant needed for pdf
+        # logpdf_const = -1 / 2 * (np.log(2.0 * np.pi) * dimension + np.linalg.slogdet(covariance)[1])
+        # return low_chol, precision, logpdf_const
