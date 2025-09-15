@@ -17,6 +17,7 @@
 import warnings
 
 import numpy as np
+import scipy as sp
 
 from queens.distributions.normal import Normal
 from queens.distributions.truncated_normal import TruncatedNormal
@@ -65,6 +66,7 @@ class CustomProduct(Likelihood):
         y_obs=None,
         experimental_data_reader=None,
     ):
+
         """Initialize likelihood model.
 
         Args:
@@ -120,6 +122,7 @@ class CustomProduct(Likelihood):
         self.number_eigenfrequencies = n_nf
         self.n_sensors = n_sensors
         self.n_observations = n_observations
+        self.noise_std_ms = np.sqrt(noise_value_ms)*(1+1/np.sqrt(self.n_sensors)) # treated as standard deviation here!
 
         normal_distribution = Normal(self.y_obs[:,:n_observations].T, covariance) # use here the transposed so that the "mean value vector" contains stacked pairs of observations
         #die observations können hier einfach als mean genommen werden 
@@ -133,9 +136,30 @@ class CustomProduct(Likelihood):
         """
         Compute the Modal Assurance Criterion between two mode shape vectors.
         
+        If vector1 is a 2D array, compute MAC between each row of vector1 and vector2,
+        returning a 1D array of MAC values.
+        
+        Parameters:
+        - vector1: 1D or 2D numpy array (if 2D, shape = (n_vectors, vector_length))
+        - vector2: 1D numpy array
+        
+        Return: MAC value(s) as float (if vector1 is 1D) or 1D numpy array (if vector1 is 2D)
         """
 
-        return np.dot(vector1,vector2)/(np.linalg.norm(vector1)*np.linalg.norm(vector2))
+        vector2_norm = np.linalg.norm(vector2)
+    
+        if vector1.ndim == 1:
+            # both vectors
+            return np.dot(vector1, vector2) / (np.linalg.norm(vector1) * vector2_norm)
+        
+        elif vector1.ndim == 2:
+            # matrix and vector
+            vector1_norms = np.linalg.norm(vector1, axis=1)
+            dot_products = np.dot(vector1, vector2)
+            return dot_products / (vector1_norms * vector2_norm)
+                    
+        else:
+            raise ValueError("vector1 must be either 1D or 2D numpy array")
 
         
     def _evaluate(self, samples):
@@ -147,49 +171,42 @@ class CustomProduct(Likelihood):
         Returns:
             dict: log-likelihood values at input samples
         """
-
-        # check here how forward model returns the results
-        # return as the eigenfrequencies and mode shapes as a long vector
-
-        
         self.response = self.forward_model.evaluate(samples) # result.shape_ 10x96: 10 chains with 8 ef + 11 sensors x 8 mode shapes = 96 elements
+
+        # --- Evaluate first part of log-likelihood --- 
+
         if self.noise_type.startswith("MAP"):
             self.update_covariance(self.response["result"])
 
-        part_1 = self.normal_distribution.logpdf(self.response["result"][:,:self.number_eigenfrequencies])
+        Gaussian_log_probabilities = self.normal_distribution.logpdf(self.response["result"][:,:self.number_eigenfrequencies]) # should be of shape n_chains x 1
 
-        mode_shapes_predicted = self.response["result"][:,self.number_eigenfrequencies:] #.reshape(-1,self.number_eigenfrequencies), shape: 10 chains x 88 modal coordinates
+        # --- Evaluate second part of log-likelihood --- 
+
+        mode_shapes_predicted = self.response["result"][:,self.number_eigenfrequencies:] #shape: 10 chains x 88 modal coordinates (= 8 mode shapes per chain à 11 sensors)
 
         # compute MAC between predicted and measured mode shapes
 
+        truncated_Gaussian_log_probabilities = np.zeros([samples.shape[0]]) #1D truncated Gaussian probabilities
         
         for obs in range(self.n_observations):
 
             for shape in range(self.number_eigenfrequencies):
 
-                vec_1 = mode_shapes_predicted[:, shape*self.n_sensors:(shape+1)*self.n_sensors] #iterate over predicted shapes
+                vec_1 = mode_shapes_predicted[:, shape*self.n_sensors:(shape+1)*self.n_sensors] #iterate over predicted shapes, shape: n_chains x n_sensors
 
                 vec_2 = self.y_obs[shape,self.n_observations+obs*self.n_sensors:self.n_observations+(obs+1)*self.n_sensors] #iterate over data matrix of y_obs
 
-                mac = self._computeMAC(vec_1, vec_2)
+                mac = self._computeMAC(vec_1, vec_2) # should be of shape n_chains x 1
+
+                # compute now probability that MAC is at 1, given the model parameters
+                
+                a, b = (0 - mac) / self.noise_std_ms, (1 - mac) / self.noise_std_ms
+
+                truncated_Gaussian_log_probabilities += sp.stats.truncnorm.logpdf(1, a, b, mac, self.noise_std_ms) # should be of shape n_chains x 1
 
 
+        return {"result": Gaussian_log_probabilities + truncated_Gaussian_log_probabilities}
 
-
-        # MAC_array = np.zeros([self.number_eigenfrequencies*self.y_obs[1].shape[1]])
-
-        # for i in range(self.y_obs[1].shape[1]):
-
-        #     for j in range(self.number_eigenfrequencies):
-
-        #         MAC_array[i*self.number_eigenfrequencies+j] = self.computeMAC(mode_shapes_predicted[j*self.number_eigenfrequencies:self.number_eigenfrequencies*(j+1)], self.y_obs[1][j*self.number_eigenfrequencies:self.number_eigenfrequencies*(j+1),i])
-
-
-        # part_2 = self.truncated_normal_distribution.logpdf(MAC_array)
-
-        # log_likelihood = part_1 + part_2
-
-        return {"result": part_1}
 
     def grad(self, samples, upstream_gradient):
         """Evaluate gradient of model w.r.t. current set of input samples.
