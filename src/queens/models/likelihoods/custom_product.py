@@ -95,7 +95,7 @@ class CustomProduct(Likelihood):
         super().__init__(forward_model, y_obs)
 
         y_obs_1_dim = y_obs[:,:n_observations].size
-        y_obs_2_dim = y_obs[:,n_observations:].size
+        #y_obs_2_dim = y_obs[:,n_observations:].size
 
         if noise_value_nf is None and noise_type.startswith("fixed"):
             raise InvalidOptionError(f"You have to provide a 'noise_value' for {noise_type}.")
@@ -115,6 +115,7 @@ class CustomProduct(Likelihood):
         else:
             raise NotImplementedError
 
+        self.cov = covariance
         self.nugget_noise_variance = nugget_noise_variance
         self.noise_type = noise_type
         self.noise_value_TN = noise_value_ms
@@ -124,12 +125,12 @@ class CustomProduct(Likelihood):
         self.n_observations = n_observations
         self.noise_std_ms = np.sqrt(noise_value_ms)*(1+1/np.sqrt(self.n_sensors)) # treated as standard deviation here!
 
-        normal_distribution = Normal(self.y_obs[:,:n_observations].T, covariance) # use here the transposed so that the "mean value vector" contains stacked pairs of observations
+        #normal_distribution = Normal(self.y_obs[:,:n_observations].T, covariance) # use here the transposed so that the "mean value vector" contains stacked pairs of observations
         #die observations können hier einfach als mean genommen werden 
         # anders als in der Formel, denn die Subtraktion wird quadriert, oder?
         truncated_normal_distribution = TruncatedNormal(1, self.noise_value_TN*(1+1/np.sqrt(n_sensors)), a_trunc=0.0, b_trunc=1.0)
         
-        self.normal_distribution = normal_distribution
+        #self.normal_distribution = normal_distribution
         self.trunc_normal_distribution = truncated_normal_distribution
 
     def _computeMAC(self, vector1, vector2):
@@ -178,8 +179,16 @@ class CustomProduct(Likelihood):
         if self.noise_type.startswith("MAP"):
             self.update_covariance(self.response["result"])
 
-        Gaussian_log_probabilities = self.normal_distribution.logpdf(self.response["result"][:,:self.number_eigenfrequencies]) # should be of shape n_chains x 1
+        #Gaussian_log_probabilities = self.normal_distribution.logpdf(self.response["result"][:,:self.number_eigenfrequencies]) # should be of shape n_chains x 1
 
+        log_likelihood = np.zeros([len(samples)]) #should give an array of size: n_chains
+
+        # iterate over chains
+        for n in range(len(samples)): 
+            
+            # such that number of variable in multivariate normal distribution fits the number of features per sample.
+            log_likelihood[n] += sp.stats.multivariate_normal.logpdf(self.y_obs[:,:self.n_observations].T, mean=self.response["result"][n,0:8], cov=self.cov).sum(axis=0)
+     
         # --- Evaluate second part of log-likelihood --- 
 
         mode_shapes_predicted = self.response["result"][:,self.number_eigenfrequencies:] #shape: 10 chains x 88 modal coordinates (= 8 mode shapes per chain à 11 sensors)
@@ -194,7 +203,7 @@ class CustomProduct(Likelihood):
 
                 vec_1 = mode_shapes_predicted[:, shape*self.n_sensors:(shape+1)*self.n_sensors] #iterate over predicted shapes, shape: n_chains x n_sensors
 
-                vec_2 = self.y_obs[shape,self.n_observations+obs*self.n_sensors:self.n_observations+(obs+1)*self.n_sensors] #iterate over data matrix of y_obs
+                vec_2 = self.y_obs[shape, self.n_observations+obs*self.n_sensors:self.n_observations+(obs+1)*self.n_sensors] #iterate over data matrix of y_obs
 
                 mac = self._computeMAC(vec_1, vec_2) # should be of shape n_chains x 1
 
@@ -202,10 +211,11 @@ class CustomProduct(Likelihood):
                 
                 a, b = (0 - mac) / self.noise_std_ms, (1 - mac) / self.noise_std_ms
 
-                truncated_Gaussian_log_probabilities += sp.stats.truncnorm.logpdf(1, a, b, mac, self.noise_std_ms) # should be of shape n_chains x 1
+                truncated_Gaussian_log_probabilities+= sp.stats.truncnorm.logpdf(1, a, b, mac, self.noise_std_ms) # should be of shape n_chains x 1
 
+        #test = 10*truncated_Gaussian_log_probabilities
 
-        return {"result": Gaussian_log_probabilities + truncated_Gaussian_log_probabilities}
+        return {"result": log_likelihood + 5*truncated_Gaussian_log_probabilities}
 
 
     def grad(self, samples, upstream_gradient):
